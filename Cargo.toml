@@ -1,0 +1,13 @@
+[package]
+name = "rustcsvtoredis"
+version = "0.1.0"
+authors = ["mmacedoeu <contato@mmacedo.eu.org>"]
+
+[dependencies]
+csv = "0.14"
+env_logger = "0.3"
+log = "0.3"
+
+[dependencies.redis]
+version = "*"
+features = ["unix_socket"]
