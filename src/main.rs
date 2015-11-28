@@ -1,13 +1,16 @@
 extern crate csv;
 extern crate redis;
+#[macro_use] extern crate log;
 extern crate env_logger;
 
 
 use std::thread;
 use std::sync::{Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
-use redis::{Commands, PipelineCommands, ToRedisArgs};
+use redis::{Commands, PipelineCommands, ToRedisArgs, FromRedisValue};
 use std::path::PathBuf;
+use std::collections::HashMap;
+use log::LogLevel;
 
 extern "C" {
   fn signal(sig: u32, cb: extern fn(u32));
@@ -47,6 +50,7 @@ fn handle_requests(fpath : String, stop : &'static Option<AtomicBool>) -> redis:
     }).unwrap();
 
     let con = client.get_connection().unwrap();
+    let mut process_map : HashMap<String, Arc<AtomicBool>> = HashMap::new();
     loop {
 		unsafe {
 			match stop_loop {
@@ -55,19 +59,49 @@ fn handle_requests(fpath : String, stop : &'static Option<AtomicBool>) -> redis:
 			}
     	}
 
-		let pop = try!(con.brpop(REQUEST_KEY, TIMEOUT));
-		println!("{:?}", pop);
+		let pop : Option<(String, String)> = try!(con.brpop(REQUEST_KEY, TIMEOUT));
+		match pop {
+		    None => {},			
+		    Some((key, item)) => {
+					let mut rdr = csv::Reader::from_string(&*item).has_headers(false);
+					for row in rdr.decode() {
+						let (cmd, targetKey) = row.unwrap_or(break);
+						match cmd {
+						    "init" => {
+						    	let mut stop_process = Arc::new(AtomicBool::new(false));
+						    	process_map.remove(&targetKey);
+						    	process_map.insert(targetKey, stop_process);
+
+						    	thread::spawn(|| {
+									let child_con = client.get_connection().unwrap();
+						    		process(fpath, targetKey, stop_process.clone(), child_con);
+						    	});
+						    },
+						    "stop" => {
+						    	let mut stop_process = process_map.get(&*targetKey);
+						    	match stop_process {
+						    	    Some(s) => {
+						    	    		s.store(true, Ordering::Relaxed);
+											process_map.remove(&targetKey);
+						    	    	},
+						    	    None => {},
+						    	}
+						    },
+						    _ => break,
+						}
+
+					}
+				},
+		}
     }
-
-
 
 	Ok(())
 }
 
-fn process (fpath : String, key: &str, stop : Arc<AtomicBool>, con: &redis::Connection) {
-    let mut rdr = csv::Reader::from_file(fpath).unwrap().has_headers(false).delimiter(b';').flexible(true);	 
+fn process (fpath : String, key: String, stop : Arc<AtomicBool>, con: redis::Connection) {
+    let rdrp = csv::Reader::from_file(fpath).unwrap().has_headers(false).delimiter(b';').flexible(true);	 
 
-	for row in rdr.records() {
+	for row in rdrp.records() {
 		let mut writer = csv::Writer::from_memory().delimiter(b';').flexible(true); 
     	let row = row.unwrap();
 
