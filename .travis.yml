@@ -6,8 +6,5 @@ rust:
   - beta
   - nightly
 
-script:
-  - make test
-
 notifications:
   email: false
