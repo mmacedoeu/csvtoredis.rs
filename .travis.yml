@@ -1,0 +1,13 @@
+
+sudo: false
+language: rust
+rust:
+  - stable
+  - beta
+  - nightly
+
+script:
+  - make test
+
+notifications:
+  email: false

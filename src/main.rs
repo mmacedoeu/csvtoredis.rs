@@ -10,7 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use redis::{Commands, PipelineCommands};
 use std::path::PathBuf;
 use std::collections::HashMap;
-use log::LogLevel;
+use std::env;
+use log::{LogRecord, LogLevelFilter};
+use env_logger::LogBuilder;
 
 extern "C" {
   fn signal(sig: u32, cb: extern fn(u32));
@@ -37,10 +39,14 @@ fn get_client_addr() -> redis::ConnectionAddr {
 fn parse_requests(item : &str) -> Option<(String, String)> {
 	let mut rdr = csv::Reader::from_string(item).has_headers(false);
 	let mut result : Option<(String, String)> = None;
-	for row in rdr.decode() {
-		let (cmd, target_key) : (String, String) = row.unwrap_or(break);
-		let tuple = (cmd, target_key);
-		result = Some(tuple);
+	for row in rdr.records().map(|r| r.unwrap()) {
+		if row.len() == 2 {
+			result = Some((row[0].clone(), row[1].clone()));
+		}
+//		let (cmd, target_key) : (String, String) = row.unwrap_or_else(|| break);
+//		info!("{:?} {:?}", cmd, target_key);		
+//		let tuple = (cmd, target_key);
+//		result = Some(tuple);
 		break;
 	}
 	result
@@ -99,11 +105,11 @@ fn handle_requests(fpath : String, stop : &'static Option<AtomicBool>) -> redis:
 		match pop {
 		    None => {},			
 		    Some((_, item)) => {
-		    			info!("item");
+		    			info!("{:?}", item);
 		    			let req = parse_requests(item.as_ref());
 		    			match req {
 		    			    Some((cmd, target_key)) => handle_cmd(cmd, target_key, &mut process_map, &client, &fpath),
-		    			    None => {},
+		    			    None => {error!("parse_requests")},
 		    			};
 			},
 		}
@@ -113,6 +119,7 @@ fn handle_requests(fpath : String, stop : &'static Option<AtomicBool>) -> redis:
 }
 
 fn process (fpath : String, key: String, stop : Arc<AtomicBool>, con: redis::Connection) {
+	info!("starting process {:?}", &key);
     let mut rdrp = csv::Reader::from_file(fpath).unwrap().has_headers(false).delimiter(b';').flexible(true);	 
 
 	for row in rdrp.records() {
@@ -128,11 +135,25 @@ fn process (fpath : String, key: String, stop : Arc<AtomicBool>, con: redis::Con
 		}
 		if stop.load(Ordering::Relaxed) {break}
 	}
+	info!("finished process {:?}", &key);
 }
 
 fn main() {
 	let fpath = ::std::env::args().nth(1).unwrap();
-    env_logger::init().unwrap();
+
+    let format = |record: &LogRecord| {
+        format!("{} - {}", record.level(), record.args())
+    };
+
+    let mut builder = LogBuilder::new();
+    builder.format(format).filter(None, LogLevelFilter::Info);
+
+    if env::var("RUST_LOG").is_ok() {
+       builder.parse(&env::var("RUST_LOG").unwrap());
+    }
+
+    builder.init().unwrap();
+
     
     unsafe {
     	stop_loop = Some(AtomicBool::new(false));
